@@ -7937,7 +7937,7 @@ public class JournalArticleLocalServiceImpl
 			(articleId.indexOf(CharPool.COMMA) != -1) ||
 			(articleId.indexOf(CharPool.SPACE) != -1)) {
 
-			throw new ArticleIdException("Invalid articleId: " + articleId);
+			throw new ArticleIdException("Invalid article ID: " + articleId);
 		}
 	}
 
@@ -8075,7 +8075,7 @@ public class JournalArticleLocalServiceImpl
 
 		if (!validated) {
 			throw new NoSuchModelException(
-				"Validation failed for journal article references");
+				"Invalid content references for journal article");
 		}
 	}
 
