@@ -14,9 +14,12 @@
 
 package com.liferay.journal.service.impl;
 
+import com.liferay.asset.kernel.AssetRendererFactoryRegistryUtil;
 import com.liferay.asset.kernel.model.AssetEntry;
 import com.liferay.asset.kernel.model.AssetLink;
 import com.liferay.asset.kernel.model.AssetLinkConstants;
+import com.liferay.asset.kernel.model.AssetRenderer;
+import com.liferay.asset.kernel.model.AssetRendererFactory;
 import com.liferay.document.library.kernel.model.DLFolderConstants;
 import com.liferay.document.library.kernel.util.DLUtil;
 import com.liferay.dynamic.data.mapping.exception.NoSuchStructureException;
@@ -73,6 +76,7 @@ import com.liferay.journal.util.comparator.ArticleIDComparator;
 import com.liferay.journal.util.comparator.ArticleVersionComparator;
 import com.liferay.journal.util.impl.JournalUtil;
 import com.liferay.petra.string.CharPool;
+import com.liferay.petra.string.StringPool;
 import com.liferay.petra.xml.XMLUtil;
 import com.liferay.portal.kernel.comment.CommentManagerUtil;
 import com.liferay.portal.kernel.dao.orm.ActionableDynamicQuery;
@@ -106,6 +110,7 @@ import com.liferay.portal.kernel.model.WorkflowDefinitionLink;
 import com.liferay.portal.kernel.module.configuration.ConfigurationException;
 import com.liferay.portal.kernel.module.configuration.ConfigurationProvider;
 import com.liferay.portal.kernel.notifications.UserNotificationDefinition;
+import com.liferay.portal.kernel.portlet.LiferayPortletRequest;
 import com.liferay.portal.kernel.portlet.PortletProvider;
 import com.liferay.portal.kernel.portlet.PortletProviderUtil;
 import com.liferay.portal.kernel.portlet.PortletRequestModel;
@@ -152,7 +157,6 @@ import com.liferay.portal.kernel.util.OrderByComparator;
 import com.liferay.portal.kernel.util.ParamUtil;
 import com.liferay.portal.kernel.util.PortalUtil;
 import com.liferay.portal.kernel.util.StringBundler;
-import com.liferay.portal.kernel.util.StringPool;
 import com.liferay.portal.kernel.util.StringUtil;
 import com.liferay.portal.kernel.util.SubscriptionSender;
 import com.liferay.portal.kernel.util.Time;
@@ -175,6 +179,7 @@ import com.liferay.trash.kernel.exception.RestoreEntryException;
 import com.liferay.trash.kernel.exception.TrashEntryException;
 import com.liferay.trash.kernel.model.TrashEntry;
 import com.liferay.trash.kernel.model.TrashVersion;
+import com.liferay.upload.AttachmentContentUpdater;
 
 import java.io.File;
 import java.io.IOException;
@@ -419,6 +424,7 @@ public class JournalArticleLocalServiceImpl
 		article.setUrlTitle(urlTitle);
 
 		content = format(user, groupId, article, content);
+		content = _replaceTempImages(article, content);
 
 		article.setContent(content);
 
@@ -5536,6 +5542,7 @@ public class JournalArticleLocalServiceImpl
 		}
 
 		content = format(user, groupId, article, content);
+		content = _replaceTempImages(article, content);
 
 		article.setFolderId(folderId);
 		article.setTreePath(article.buildTreePath());
@@ -6199,6 +6206,7 @@ public class JournalArticleLocalServiceImpl
 			LocaleUtil.toLanguageId(locale));
 
 		content = format(user, groupId, article, content);
+		content = _replaceTempImages(article, content);
 
 		article.setContent(content);
 
@@ -7730,6 +7738,37 @@ public class JournalArticleLocalServiceImpl
 		return urlTitle;
 	}
 
+	protected String getURLViewInContext(
+		JournalArticle article, ServiceContext serviceContext) {
+
+		LiferayPortletRequest liferayPortletRequest =
+			serviceContext.getLiferayPortletRequest();
+
+		if (liferayPortletRequest == null) {
+			return StringPool.BLANK;
+		}
+
+		String urlViewInContext = StringPool.BLANK;
+
+		try {
+			AssetRendererFactory<JournalArticle> assetRendererFactory =
+				AssetRendererFactoryRegistryUtil.getAssetRendererFactoryByClass(
+					JournalArticle.class);
+
+			AssetRenderer<JournalArticle> assetRenderer =
+				assetRendererFactory.getAssetRenderer(
+					article, AssetRendererFactory.TYPE_LATEST_APPROVED);
+
+			urlViewInContext = assetRenderer.getURLViewInContext(
+				liferayPortletRequest, null, serviceContext.getCurrentURL());
+		}
+		catch (Exception e) {
+			_log.error(e, e);
+		}
+
+		return urlViewInContext;
+	}
+
 	protected boolean hasModifiedLatestApprovedVersion(
 		long groupId, String articleId, double version) {
 
@@ -7800,9 +7839,14 @@ public class JournalArticleLocalServiceImpl
 
 		String articleTitle = article.getTitle(serviceContext.getLanguageId());
 
-		articleURL = buildArticleURL(
-			articleURL, article.getGroupId(), article.getFolderId(),
-			article.getArticleId());
+		if (Validator.isNotNull(article.getLayoutUuid())) {
+			articleURL = getURLViewInContext(article, serviceContext);
+		}
+		else {
+			articleURL = buildArticleURL(
+				articleURL, article.getGroupId(), article.getFolderId(),
+				article.getArticleId());
+		}
 
 		if (action.equals("add") &&
 			journalGroupServiceConfiguration.emailArticleAddedEnabled()) {
@@ -8772,6 +8816,22 @@ public class JournalArticleLocalServiceImpl
 	protected com.liferay.portal.kernel.service.SubscriptionLocalService
 		subscriptionLocalService;
 
+	private FileEntry _addArticleAttachmentFileEntry(
+			JournalArticle article, long folderId, FileEntry fileEntry)
+		throws PortalException {
+
+		String fileEntryName = DLUtil.getUniqueFileName(
+			fileEntry.getGroupId(), fileEntry.getFolderId(),
+			fileEntry.getFileName());
+
+		return PortletFileRepositoryUtil.addPortletFileEntry(
+			article.getGroupId(), fileEntry.getUserId(),
+			JournalArticle.class.getName(), article.getResourcePrimKey(),
+			JournalConstants.SERVICE_NAME, folderId,
+			fileEntry.getContentStream(), fileEntryName,
+			fileEntry.getMimeType(), false);
+	}
+
 	private List<JournalArticleLocalization> _addArticleLocalizedFields(
 			long companyId, long articlePK, Map<Locale, String> titleMap,
 			Map<Locale, String> descriptionMap)
@@ -8902,6 +8962,17 @@ public class JournalArticleLocalServiceImpl
 		return urlTitleMap;
 	}
 
+	private String _replaceTempImages(JournalArticle article, String content)
+		throws PortalException {
+
+		Folder folder = article.addImagesFolder();
+
+		return _attachmentContentUpdater.updateContent(
+			content, ContentTypes.TEXT_HTML,
+			fileEntry -> _addArticleAttachmentFileEntry(
+				article, folder.getFolderId(), fileEntry));
+	}
+
 	private List<JournalArticleLocalization> _updateArticleLocalizedFields(
 			long companyId, long articleId, Map<Locale, String> titleMap,
 			Map<Locale, String> descriptionMap)
@@ -8952,6 +9023,9 @@ public class JournalArticleLocalServiceImpl
 
 	private static final Log _log = LogFactoryUtil.getLog(
 		JournalArticleLocalServiceImpl.class);
+
+	@ServiceReference(type = AttachmentContentUpdater.class)
+	private AttachmentContentUpdater _attachmentContentUpdater;
 
 	@ServiceReference(type = JournalFileUploadsConfiguration.class)
 	private JournalFileUploadsConfiguration _journalFileUploadsConfiguration;
